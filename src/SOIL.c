@@ -34,6 +34,7 @@
 #include "stb_image_aug.h"
 #include "image_helper.h"
 #include "image_DXT.h"
+#include "image_DXT_flip.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1543,6 +1544,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	/*	file reading variables	*/
 	unsigned int S3TC_type = 0;
 	unsigned char *DDS_data;
+	unsigned char *DDS_data_fliptemp;
 	unsigned int DDS_main_size;
 	unsigned int DDS_full_size;
 	unsigned int width, height;
@@ -1595,12 +1597,14 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	{
 		goto quick_exit;
 	}
+
 	/*	OK, validated the header, let's load the image data	*/
 	result_string_pointer = "DDS header loaded and validated";
 	width = header.dwWidth;
 	height = header.dwHeight;
 	uncompressed = 1 - (header.sPixelFormat.dwFlags & DDPF_FOURCC) / DDPF_FOURCC;
 	cubemap = (header.sCaps.dwCaps2 & DDSCAPS2_CUBEMAP) / DDSCAPS2_CUBEMAP;
+
 	if( uncompressed )
 	{
 		S3TC_type = GL_RGB;
@@ -1638,6 +1642,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		}
 		DDS_main_size = ((width+3)>>2)*((height+3)>>2)*block_size;
 	}
+
 	if( cubemap )
 	{
 		/* does the user want a cubemap?	*/
@@ -1704,6 +1709,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		mipmaps = 0;
 		DDS_full_size = DDS_main_size;
 	}
+	DDS_data_fliptemp = (unsigned char*)malloc( DDS_full_size );
 	DDS_data = (unsigned char*)malloc( DDS_full_size );
 	/*	got the image data RAM, create or use an existing OpenGL texture handle	*/
 	tex_ID = reuse_texture_ID;
@@ -1719,8 +1725,16 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		if( buffer_index + DDS_full_size <= buffer_length )
 		{
 			unsigned int byte_offset = DDS_main_size;
-			memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
+
+			if(flags & SOIL_FLAG_INVERT_Y)
+			{
+				memcpy( (void*)DDS_data_fliptemp, (const void*)(&buffer[buffer_index]), DDS_full_size );			
+			} else {
+				memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
+			}			
+
 			buffer_index += DDS_full_size;
+
 			/*	upload the main chunk	*/
 			if( uncompressed )
 			{
@@ -1729,8 +1743,17 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 				for( i = 0; i < DDS_full_size; i += block_size )
 				{
 					unsigned char temp = DDS_data[i];
-					DDS_data[i] = DDS_data[i+2];
-					DDS_data[i+2] = temp;
+					if(flags & SOIL_FLAG_INVERT_Y)
+					{
+						DDS_data[i] = DDS_data_fliptemp[i+2];
+						DDS_data[i+1] = DDS_data_fliptemp[i+1];
+						DDS_data[i+2] = DDS_data_fliptemp[i];
+					} else
+					{
+						temp = DDS_data[i];
+						DDS_data[i] = DDS_data[i+2];
+						DDS_data[i+2] = temp;
+					}
 				}
 				glTexImage2D(
 					cf_target, 0,
@@ -1738,15 +1761,44 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 					S3TC_type, GL_UNSIGNED_BYTE, DDS_data );
 			} else
 			{
+				int w_bytes = ((width+3)/4)*block_size;
+				unsigned char *s, *d;
+				int j = 0;
+				int k = 0;
+
+				if(flags & SOIL_FLAG_INVERT_Y)
+				{
+
+					s = DDS_data_fliptemp;
+					d = DDS_data + ((height+3)/4-1) * w_bytes;
+					for(j = 0; j < (height+3)/4; j++)
+					{
+						memcpy(d, s, w_bytes);
+						//DDS_data
+						if(block_size==8)
+						{
+							for(k=0;k<w_bytes/block_size;k++)
+								FlipDXT1BlockFull(d+k*block_size);
+						}
+						s+=w_bytes;
+						d-=w_bytes;
+
+					}
+				}
+
 				soilGlCompressedTexImage2D(
 					cf_target, 0,
 					S3TC_type, width, height, 0,
 					DDS_main_size, DDS_data );
 			}
+
+
+
 			/*	upload the mipmaps, if we have them	*/
 			for( i = 1; i <= mipmaps; ++i )
 			{
 				int w, h, mip_size;
+				int w_bytes, w_bytes2;
 				w = width >> i;
 				h = height >> i;
 				if( w < 1 )
@@ -1757,6 +1809,11 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 				{
 					h = 1;
 				}
+
+
+				w_bytes = ((w+3)/4)*block_size; 
+
+
 				/*	upload this mipmap	*/
 				if( uncompressed )
 				{
@@ -1768,6 +1825,30 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 				} else
 				{
 					mip_size = ((w+3)/4)*((h+3)/4)*block_size;
+
+					if(flags & SOIL_FLAG_INVERT_Y)
+					{
+						unsigned char *s, *d;
+						int j = 0;
+						int k = 0;
+						//byte_offset = byte_offset;
+						s = DDS_data_fliptemp + byte_offset;
+						d = DDS_data + byte_offset;
+						for(j = 0; j < (h+3)/4; j++)
+						{
+							memcpy(d, s, w_bytes);
+							//DDS_data
+							if(block_size==8)
+							{
+								for(k=0;k<w_bytes/block_size;k++)
+									FlipDXT1BlockFull(d+k*block_size);
+							}
+							s+=w_bytes;
+							d-=w_bytes;
+
+						}
+					}
+
 					soilGlCompressedTexImage2D(
 						cf_target, i,
 						S3TC_type, w, h, 0,
@@ -1862,6 +1943,7 @@ unsigned int SOIL_direct_load_DDS(
 		/*	huh?	*/
 		buffer_length = bytes_read;
 	}
+
 	/*	now try to do the loading	*/
 	tex_ID = SOIL_direct_load_DDS_from_memory(
 		(const unsigned char *const)buffer, buffer_length,
