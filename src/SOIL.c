@@ -1552,6 +1552,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	unsigned int flag;
 	unsigned int cf_target, ogl_target_start, ogl_target_end;
 	unsigned int opengl_texture_type;
+	int shift_offset;
 	int i;
 	/*	1st off, does the filename even exist?	*/
 	if( NULL == buffer )
@@ -1677,7 +1678,6 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	}
 	if( (header.sCaps.dwCaps1 & DDSCAPS_MIPMAP) && (header.dwMipMapCount > 1) )
 	{
-		int shift_offset;
 		mipmaps = header.dwMipMapCount - 1;
 		DDS_full_size = DDS_main_size;
 		if( uncompressed )
@@ -1724,139 +1724,116 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	{
 		if( buffer_index + DDS_full_size <= buffer_length )
 		{
-			unsigned int byte_offset = DDS_main_size;
+			unsigned int byte_offset = 0;
 
 			if(flags & SOIL_FLAG_INVERT_Y)
 			{
 				memcpy( (void*)DDS_data_fliptemp, (const void*)(&buffer[buffer_index]), DDS_full_size );			
 			} else {
 				memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
-			}			
-
+			}
 			buffer_index += DDS_full_size;
 
-			/*	upload the main chunk	*/
-			if( uncompressed )
+			if(uncompressed)
 			{
-				/*	and remember, DXT uncompressed uses BGR(A),
-					so swap to RGB(A) for ALL MIPmap levels	*/
-				for( i = 0; i < DDS_full_size; i += block_size )
-				{
-					unsigned char temp = DDS_data[i];
-					if(flags & SOIL_FLAG_INVERT_Y)
-					{
-						DDS_data[i] = DDS_data_fliptemp[i+2];
-						DDS_data[i+1] = DDS_data_fliptemp[i+1];
-						DDS_data[i+2] = DDS_data_fliptemp[i];
-					} else
-					{
-						temp = DDS_data[i];
-						DDS_data[i] = DDS_data[i+2];
-						DDS_data[i+2] = temp;
-					}
-				}
-				glTexImage2D(
-					cf_target, 0,
-					S3TC_type, width, height, 0,
-					S3TC_type, GL_UNSIGNED_BYTE, DDS_data );
-			} else
-			{
-				int w_bytes = ((width+3)/4)*block_size;
-				unsigned char *s, *d;
-				int j = 0;
-				int k = 0;
 
-				if(flags & SOIL_FLAG_INVERT_Y)
+				for( i = 0; i <= mipmaps; ++i )
 				{
+					int j, w, h, w_bytes, mip_size;
+					w = width >> (shift_offset + i);
+					h = height >> (shift_offset + i);
+					if(w < 1) w = 1;
+					if(h < 1) h = 1;
+					w_bytes = w * block_size;
+					mip_size = h * w_bytes;
 
-					s = DDS_data_fliptemp;
-					d = DDS_data + ((height+3)/4-1) * w_bytes;
-					for(j = 0; j < (height+3)/4; j++)
+
+					for( j = 0; j < mip_size; j += block_size )
 					{
-						memcpy(d, s, w_bytes);
-						//DDS_data
-						if(block_size==8)
+						unsigned char temp = DDS_data[i];
+						if(flags & SOIL_FLAG_INVERT_Y)
 						{
-							for(k=0;k<w_bytes/block_size;k++)
-								FlipDXT1BlockFull(d+k*block_size);
+							DDS_data[j] = DDS_data_fliptemp[j+2];
+							DDS_data[j+1] = DDS_data_fliptemp[j+1];
+							DDS_data[j+2] = DDS_data_fliptemp[j];
+						} else
+						{
+							temp = DDS_data[j];
+							DDS_data[j] = DDS_data[j+2];
+							DDS_data[j+2] = temp;
 						}
-						s+=w_bytes;
-						d-=w_bytes;
-
 					}
-				}
-
-				soilGlCompressedTexImage2D(
-					cf_target, 0,
-					S3TC_type, width, height, 0,
-					DDS_main_size, DDS_data );
-			}
-
-
-
-			/*	upload the mipmaps, if we have them	*/
-			for( i = 1; i <= mipmaps; ++i )
-			{
-				int w, h, mip_size;
-				int w_bytes, w_bytes2;
-				w = width >> i;
-				h = height >> i;
-				if( w < 1 )
-				{
-					w = 1;
-				}
-				if( h < 1 )
-				{
-					h = 1;
-				}
-
-
-				w_bytes = ((w+3)/4)*block_size; 
-
-
-				/*	upload this mipmap	*/
-				if( uncompressed )
-				{
-					mip_size = w*h*block_size;
 					glTexImage2D(
 						cf_target, i,
-						S3TC_type, w, h, 0,
-						S3TC_type, GL_UNSIGNED_BYTE, &DDS_data[byte_offset] );
-				} else
-				{
-					mip_size = ((w+3)/4)*((h+3)/4)*block_size;
+						S3TC_type, width, height, 0,
+						S3TC_type, GL_UNSIGNED_BYTE, DDS_data );
 
+				}
+
+			} else {
+
+				// @jetha	Let's do the main chunk at the same time using the same
+				//			routines as the various	mipmap levels; that way we can
+				//			infer whether our approach is working from the main
+				//			chunk.
+				for( i = 0; i <= mipmaps; ++i )
+				{
+					int w, h, w_bytes, mip_size;
+					w = width >> (shift_offset + i);
+					h = height >> (shift_offset + i);
+					if(w < 1) w = 1;
+					if(h < 1) h = 1;
+					w_bytes = w * block_size;
+					mip_size = h * w_bytes;
+				
 					if(flags & SOIL_FLAG_INVERT_Y)
 					{
+						// do a DXT-appropriate flip
 						unsigned char *s, *d;
 						int j = 0;
 						int k = 0;
-						//byte_offset = byte_offset;
 						s = DDS_data_fliptemp + byte_offset;
-						d = DDS_data + byte_offset;
-						for(j = 0; j < (h+3)/4; j++)
+						d = DDS_data + byte_offset + ((h-1)*w_bytes);
+						for(j = 0; j < h; j++)
 						{
 							memcpy(d, s, w_bytes);
-							//DDS_data
-							if(block_size==8)
+						
+							switch(S3TC_type)
 							{
-								for(k=0;k<w_bytes/block_size;k++)
-									FlipDXT1BlockFull(d+k*block_size);
+							case SOIL_RGBA_S3TC_DXT1:
+								for(k=0; k < w; k++)
+									FlipDXT1BlockFull(d + k * block_size);
+								break;
+							case SOIL_RGBA_S3TC_DXT3:
+								for(k=0; k < w; k++)
+									FlipDXT3BlockFull(d + k * block_size);
+								break;
+							case SOIL_RGBA_S3TC_DXT5:
+								for(k=0; k < w; k++)
+									FlipDXT5BlockFull(d + k * block_size);
+								break;
 							}
-							s+=w_bytes;
-							d-=w_bytes;
-
+							s += w_bytes;
+							d -= w_bytes;
 						}
 					}
+				
 
+					//if(i == 0)
+					//{
+						w *= 4;
+						h *= 4;
+					//}
 					soilGlCompressedTexImage2D(
 						cf_target, i,
 						S3TC_type, w, h, 0,
 						mip_size, &DDS_data[byte_offset] );
+					byte_offset += mip_size;
 				}
-				/*	and move to the next mipmap	*/
-				byte_offset += mip_size;
+
+
 			}
+
 			/*	it worked!	*/
 			result_string_pointer = "DDS file loaded";
 		} else
@@ -1868,6 +1845,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		}
 	}/* end reading each face */
 	SOIL_free_image_data( DDS_data );
+	//SOIL_free_image_data( DDS_data_fliptemp );
 	if( tex_ID )
 	{
 		/*	did I have MIPmaps?	*/
@@ -2050,7 +2028,8 @@ int query_DXT_capability( void )
 				ext_addr = (P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC)
 						wglGetProcAddress
 						(
-							"glCompressedTexImage2DARB"
+							//"glCompressedTexImage2DARB"
+							"glCompressedTexImage2D"
 						);
 			#elif defined(__APPLE__) || defined(__APPLE_CC__)
 				/*	I can't test this Apple stuff!	*/

@@ -45,7 +45,7 @@ void FlipDXT3BlockFull(unsigned char *block)
 	FlipDXT1BlockFull(block + 8);
 }
 
-static void FlipDXT5BlockFull(unsigned char *block)
+void FlipDXT5BlockFull(unsigned char *block)
 // From http://src.chromium.org/viewvc/chrome/trunk/src/o3d/core/cross/bitmap_dds.cc?view=markup&pathrev=21227
 // Original source contained bugs; fixed here.
 {
