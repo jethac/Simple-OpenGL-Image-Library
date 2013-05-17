@@ -34,6 +34,7 @@
 #include "stb_image_aug.h"
 #include "image_helper.h"
 #include "image_DXT.h"
+#include "image_DXT_flip.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1543,6 +1544,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	/*	file reading variables	*/
 	unsigned int S3TC_type = 0;
 	unsigned char *DDS_data;
+	unsigned char *DDS_data_fliptemp;
 	unsigned int DDS_main_size;
 	unsigned int DDS_full_size;
 	unsigned int width, height;
@@ -1550,6 +1552,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	unsigned int flag;
 	unsigned int cf_target, ogl_target_start, ogl_target_end;
 	unsigned int opengl_texture_type;
+	int shift_offset;
 	int i;
 	/*	1st off, does the filename even exist?	*/
 	if( NULL == buffer )
@@ -1595,12 +1598,14 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	{
 		goto quick_exit;
 	}
+
 	/*	OK, validated the header, let's load the image data	*/
 	result_string_pointer = "DDS header loaded and validated";
 	width = header.dwWidth;
 	height = header.dwHeight;
 	uncompressed = 1 - (header.sPixelFormat.dwFlags & DDPF_FOURCC) / DDPF_FOURCC;
 	cubemap = (header.sCaps.dwCaps2 & DDSCAPS2_CUBEMAP) / DDSCAPS2_CUBEMAP;
+
 	if( uncompressed )
 	{
 		S3TC_type = GL_RGB;
@@ -1638,6 +1643,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		}
 		DDS_main_size = ((width+3)>>2)*((height+3)>>2)*block_size;
 	}
+
 	if( cubemap )
 	{
 		/* does the user want a cubemap?	*/
@@ -1672,7 +1678,6 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	}
 	if( (header.sCaps.dwCaps1 & DDSCAPS_MIPMAP) && (header.dwMipMapCount > 1) )
 	{
-		int shift_offset;
 		mipmaps = header.dwMipMapCount - 1;
 		DDS_full_size = DDS_main_size;
 		if( uncompressed )
@@ -1704,6 +1709,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		mipmaps = 0;
 		DDS_full_size = DDS_main_size;
 	}
+	DDS_data_fliptemp = (unsigned char*)malloc( DDS_full_size );
 	DDS_data = (unsigned char*)malloc( DDS_full_size );
 	/*	got the image data RAM, create or use an existing OpenGL texture handle	*/
 	tex_ID = reuse_texture_ID;
@@ -1718,64 +1724,116 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 	{
 		if( buffer_index + DDS_full_size <= buffer_length )
 		{
-			unsigned int byte_offset = DDS_main_size;
-			memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
-			buffer_index += DDS_full_size;
-			/*	upload the main chunk	*/
-			if( uncompressed )
+			unsigned int byte_offset = 0;
+
+			if(flags & SOIL_FLAG_INVERT_Y)
 			{
-				/*	and remember, DXT uncompressed uses BGR(A),
-					so swap to RGB(A) for ALL MIPmap levels	*/
-				for( i = 0; i < DDS_full_size; i += block_size )
-				{
-					unsigned char temp = DDS_data[i];
-					DDS_data[i] = DDS_data[i+2];
-					DDS_data[i+2] = temp;
-				}
-				glTexImage2D(
-					cf_target, 0,
-					S3TC_type, width, height, 0,
-					S3TC_type, GL_UNSIGNED_BYTE, DDS_data );
-			} else
-			{
-				soilGlCompressedTexImage2D(
-					cf_target, 0,
-					S3TC_type, width, height, 0,
-					DDS_main_size, DDS_data );
+				memcpy( (void*)DDS_data_fliptemp, (const void*)(&buffer[buffer_index]), DDS_full_size );			
+			} else {
+				memcpy( (void*)DDS_data, (const void*)(&buffer[buffer_index]), DDS_full_size );
 			}
-			/*	upload the mipmaps, if we have them	*/
-			for( i = 1; i <= mipmaps; ++i )
+			buffer_index += DDS_full_size;
+
+			if(uncompressed)
 			{
-				int w, h, mip_size;
-				w = width >> i;
-				h = height >> i;
-				if( w < 1 )
+
+				for( i = 0; i <= mipmaps; ++i )
 				{
-					w = 1;
-				}
-				if( h < 1 )
-				{
-					h = 1;
-				}
-				/*	upload this mipmap	*/
-				if( uncompressed )
-				{
-					mip_size = w*h*block_size;
+					int j, w, h, w_bytes, mip_size;
+					w = width >> (shift_offset + i);
+					h = height >> (shift_offset + i);
+					if(w < 1) w = 1;
+					if(h < 1) h = 1;
+					w_bytes = w * block_size;
+					mip_size = h * w_bytes;
+
+
+					for( j = 0; j < mip_size; j += block_size )
+					{
+						unsigned char temp = DDS_data[i];
+						if(flags & SOIL_FLAG_INVERT_Y)
+						{
+							DDS_data[j] = DDS_data_fliptemp[j+2];
+							DDS_data[j+1] = DDS_data_fliptemp[j+1];
+							DDS_data[j+2] = DDS_data_fliptemp[j];
+						} else
+						{
+							temp = DDS_data[j];
+							DDS_data[j] = DDS_data[j+2];
+							DDS_data[j+2] = temp;
+						}
+					}
 					glTexImage2D(
 						cf_target, i,
-						S3TC_type, w, h, 0,
-						S3TC_type, GL_UNSIGNED_BYTE, &DDS_data[byte_offset] );
-				} else
+						S3TC_type, width, height, 0,
+						S3TC_type, GL_UNSIGNED_BYTE, DDS_data );
+
+				}
+
+			} else {
+
+				// @jetha	Let's do the main chunk at the same time using the same
+				//			routines as the various	mipmap levels; that way we can
+				//			infer whether our approach is working from the main
+				//			chunk.
+				for( i = 0; i <= mipmaps; ++i )
 				{
-					mip_size = ((w+3)/4)*((h+3)/4)*block_size;
+					int w, h, w_bytes, mip_size;
+					w = width >> (shift_offset + i);
+					h = height >> (shift_offset + i);
+					if(w < 1) w = 1;
+					if(h < 1) h = 1;
+					w_bytes = w * block_size;
+					mip_size = h * w_bytes;
+				
+					if(flags & SOIL_FLAG_INVERT_Y)
+					{
+						// do a DXT-appropriate flip
+						unsigned char *s, *d;
+						int j = 0;
+						int k = 0;
+						s = DDS_data_fliptemp + byte_offset;
+						d = DDS_data + byte_offset + ((h-1)*w_bytes);
+						for(j = 0; j < h; j++)
+						{
+							memcpy(d, s, w_bytes);
+						
+							switch(S3TC_type)
+							{
+							case SOIL_RGBA_S3TC_DXT1:
+								for(k=0; k < w; k++)
+									FlipDXT1BlockFull(d + k * block_size);
+								break;
+							case SOIL_RGBA_S3TC_DXT3:
+								for(k=0; k < w; k++)
+									FlipDXT3BlockFull(d + k * block_size);
+								break;
+							case SOIL_RGBA_S3TC_DXT5:
+								for(k=0; k < w; k++)
+									FlipDXT5BlockFull(d + k * block_size);
+								break;
+							}
+							s += w_bytes;
+							d -= w_bytes;
+						}
+					}
+				
+
+					//if(i == 0)
+					//{
+						w *= 4;
+						h *= 4;
+					//}
 					soilGlCompressedTexImage2D(
 						cf_target, i,
 						S3TC_type, w, h, 0,
 						mip_size, &DDS_data[byte_offset] );
+					byte_offset += mip_size;
 				}
-				/*	and move to the next mipmap	*/
-				byte_offset += mip_size;
+
+
 			}
+
 			/*	it worked!	*/
 			result_string_pointer = "DDS file loaded";
 		} else
@@ -1787,6 +1845,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		}
 	}/* end reading each face */
 	SOIL_free_image_data( DDS_data );
+	//SOIL_free_image_data( DDS_data_fliptemp );
 	if( tex_ID )
 	{
 		/*	did I have MIPmaps?	*/
@@ -1862,6 +1921,7 @@ unsigned int SOIL_direct_load_DDS(
 		/*	huh?	*/
 		buffer_length = bytes_read;
 	}
+
 	/*	now try to do the loading	*/
 	tex_ID = SOIL_direct_load_DDS_from_memory(
 		(const unsigned char *const)buffer, buffer_length,
@@ -1968,7 +2028,8 @@ int query_DXT_capability( void )
 				ext_addr = (P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC)
 						wglGetProcAddress
 						(
-							"glCompressedTexImage2DARB"
+							//"glCompressedTexImage2DARB"
+							"glCompressedTexImage2D"
 						);
 			#elif defined(__APPLE__) || defined(__APPLE_CC__)
 				/*	I can't test this Apple stuff!	*/
