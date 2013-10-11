@@ -18,8 +18,9 @@
 #ifdef WIN32
 	#define WIN32_LEAN_AND_MEAN
 	#include <windows.h>
-	#include <wingdi.h>
-	#include <GL/gl.h>
+#include <wingdi.h>
+#include <GL/gl3w.h>
+#include <GL/GL.h>
 #elif defined(__APPLE__) || defined(__APPLE_CC__)
 	/*	I can't test this Apple stuff!	*/
 	#include <OpenGL/gl.h>
@@ -48,6 +49,12 @@ enum{
 	SOIL_CAPABILITY_NONE = 0,
 	SOIL_CAPABILITY_PRESENT = 1
 };
+
+
+#define SOIL_GL_LUMINANCE                      0x1909
+#define SOIL_GL_LUMINANCE_ALPHA                0x190A
+#define SOIL_GL_CLAMP                          0x2900
+
 static int has_cubemap_capability = SOIL_CAPABILITY_UNKNOWN;
 int query_cubemap_capability( void );
 #define SOIL_TEXTURE_WRAP_R					0x8072
@@ -1178,10 +1185,10 @@ unsigned int
 		switch( channels )
 		{
 		case 1:
-			original_texture_format = GL_LUMINANCE;
+			original_texture_format = SOIL_GL_LUMINANCE;
 			break;
 		case 2:
-			original_texture_format = GL_LUMINANCE_ALPHA;
+			original_texture_format = SOIL_GL_LUMINANCE_ALPHA;
 			break;
 		case 3:
 			original_texture_format = GL_RGB;
@@ -1344,7 +1351,7 @@ unsigned int
 		} else
 		{
 			/*	unsigned int clamp_mode = SOIL_CLAMP_TO_EDGE;	*/
-			unsigned int clamp_mode = GL_CLAMP;
+			unsigned int clamp_mode = SOIL_GL_CLAMP;
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_S, clamp_mode );
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_T, clamp_mode );
 			if( opengl_texture_type == SOIL_TEXTURE_CUBE_MAP )
@@ -1869,7 +1876,7 @@ unsigned int SOIL_direct_load_DDS_from_memory(
 		} else
 		{
 			/*	unsigned int clamp_mode = SOIL_CLAMP_TO_EDGE;	*/
-			unsigned int clamp_mode = GL_CLAMP;
+			unsigned int clamp_mode = SOIL_GL_CLAMP;
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_S, clamp_mode );
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_T, clamp_mode );
 			glTexParameteri( opengl_texture_type, SOIL_TEXTURE_WRAP_R, clamp_mode );
@@ -1930,16 +1937,43 @@ unsigned int SOIL_direct_load_DDS(
 	return tex_ID;
 }
 
+/**
+ * Checks the current environment's non-power-of-two texture support, if it
+ * hasn't been already; sets a global flag and returns it for usage.
+ * 
+ * Possible return values:
+ *		SOIL_CAPABILITY_UNKNOWN
+ *		SOIL_CAPABILITY_NONE
+ *		SOIL_CAPABILITY_PRESENT
+ */
 int query_NPOT_capability( void )
 {
-	/*	check for the capability	*/
+	// early out if check has already been completed
+	// @todo	assess if this is actually a good idea
 	if( has_NPOT_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
-		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_non_power_of_two" ) )
-			)
+		const char* extensionname = "GL_ARB_texture_non_power_of_two";
+
+		// 2013/10/10: Replacing OpenGL 2.x-era extension check.
+		GLint idx;// = 0;
+		GLint extensioncount;// = 0;
+		char bFound = 0;
+		glGetIntegerv(GL_NUM_EXTENSIONS, &extensioncount);
+		for (idx = 0; idx < extensioncount; ++idx)
+		{
+			if(strncmp(
+				(const char*)glGetStringi(GL_EXTENSIONS, idx),
+				extensionname,
+				strlen(extensionname)
+				) == 0)
+			{
+				bFound = 1;
+				break;
+			}
+		}
+
+
+		if(bFound != 1)
 		{
 			/*	not there, flag the failure	*/
 			has_NPOT_capability = SOIL_CAPABILITY_NONE;
@@ -1955,27 +1989,51 @@ int query_NPOT_capability( void )
 
 int query_tex_rectangle_capability( void )
 {
-	/*	check for the capability	*/
+	const char* const texrect_extnames[3] = {
+		"GL_ARB_texture_rectangle",
+		"GL_EXT_texture_rectangle",
+		"GL_NV_texture_rectangle",
+	};
+
+	// early out if check has already been completed
+	// @todo	assess if this is actually a good idea
 	if( has_tex_rectangle_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
-		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_rectangle" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_rectangle" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_NV_texture_rectangle" ) )
-			)
+
+
+		// 2013/10/10: Replacing OpenGL 2.x-era extension check.
+		GLint idx;// = 0;
+		GLint extensioncount;// = 0;
+		char bFound = 0;
+		glGetIntegerv(GL_NUM_EXTENSIONS, &extensioncount);
+		for (idx = 0; idx < extensioncount; ++idx)
 		{
-			/*	not there, flag the failure	*/
-			has_tex_rectangle_capability = SOIL_CAPABILITY_NONE;
-		} else
+			const char* extstr = (const char*)glGetStringi(GL_EXTENSIONS, idx);
+
+
+			GLint extidx = 0;
+			for (extidx = 0; extidx < 3; ++extidx)
+			{
+				if(strncmp(
+					extstr,
+					texrect_extnames[extidx],
+					strlen(texrect_extnames[extidx])
+					) == 0)
+				{
+					// if we've found one of the extensions
+					bFound = 1;
+					break;
+				}
+				if(bFound == 1)
+					break;
+			}
+		}
+
+		if(bFound == 1)
 		{
-			/*	it's there!	*/
 			has_tex_rectangle_capability = SOIL_CAPABILITY_PRESENT;
+		} else {
+			has_tex_rectangle_capability = SOIL_CAPABILITY_NONE;
 		}
 	}
 	/*	let the user know if we can do texture rectangles or not	*/
@@ -1984,39 +2042,91 @@ int query_tex_rectangle_capability( void )
 
 int query_cubemap_capability( void )
 {
+	const char* const cubemap_extnames[2] = {
+		"GL_ARB_texture_cube_map",
+		"GL_EXT_texture_cube_map"
+	};
 	/*	check for the capability	*/
 	if( has_cubemap_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
-		/*	we haven't yet checked for the capability, do so	*/
-		if(
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_ARB_texture_cube_map" ) )
-		&&
-			(NULL == strstr( (char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_cube_map" ) )
-			)
+
+
+		// 2013/10/10: Replacing OpenGL 2.x-era extension check.
+		GLint idx;// = 0;
+		GLint extensioncount;// = 0;
+		char bFound = 0;
+		glGetIntegerv(GL_NUM_EXTENSIONS, &extensioncount);
+		for (idx = 0; idx < extensioncount; ++idx)
 		{
-			/*	not there, flag the failure	*/
-			has_cubemap_capability = SOIL_CAPABILITY_NONE;
-		} else
+			const char* extstr = (const char*)glGetStringi(GL_EXTENSIONS, idx);
+
+			GLint extidx = 0;
+			for (extidx = 0; extidx < 2; ++extidx)
+			{
+				if(strncmp(
+					extstr,
+					cubemap_extnames[extidx],
+					strlen(cubemap_extnames[extidx])
+					) == 0)
+				{
+					// if we've found one of the extensions
+					bFound = 1;
+					break;
+				}
+				if(bFound == 1)
+					break;
+			}
+		}
+
+		if(bFound == 1)
 		{
-			/*	it's there!	*/
 			has_cubemap_capability = SOIL_CAPABILITY_PRESENT;
+		} else {
+			has_cubemap_capability = SOIL_CAPABILITY_NONE;
 		}
 	}
 	/*	let the user know if we can do cubemaps or not	*/
 	return has_cubemap_capability;
 }
 
+/**
+ * Checks the current environment's DXT capabilities, if they haven't been
+ * already; sets a global flag and returns it for usage.
+ * 
+ * Possible return values:
+ *		SOIL_CAPABILITY_UNKNOWN
+ *		SOIL_CAPABILITY_NONE
+ *		SOIL_CAPABILITY_PRESENT
+ */
 int query_DXT_capability( void )
 {
-	/*	check for the capability	*/
+	// early out if check has already been completed
+	// @todo	assess if this is actually a good idea
 	if( has_DXT_capability == SOIL_CAPABILITY_UNKNOWN )
 	{
-		/*	we haven't yet checked for the capability, do so	*/
-		if( NULL == strstr(
-				(char const*)glGetString( GL_EXTENSIONS ),
-				"GL_EXT_texture_compression_s3tc" ) )
+		const char* extensionname = "GL_EXT_texture_compression_s3tc";
+
+		// 2013/10/10: Replacing OpenGL 2.x-era extension check.
+		GLint idx;// = 0;
+		GLint extensioncount;// = 0;
+		char bFound = 0;
+		glGetIntegerv(GL_NUM_EXTENSIONS, &extensioncount);
+		for (idx = 0; idx < extensioncount; ++idx)
+		{
+			if(strncmp(
+				(const char*)glGetStringi(GL_EXTENSIONS, idx),
+				extensionname,
+				strlen(extensionname)
+			) == 0)
+			{
+				bFound = 1;
+				break;
+			}
+		}
+
+
+		//char const* glexts = (char const*)glGetString( GL_EXTENSIONS );
+		if(bFound == 1)
 		{
 			/*	not there, flag the failure	*/
 			has_DXT_capability = SOIL_CAPABILITY_NONE;
