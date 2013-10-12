@@ -13,7 +13,7 @@
 	* everybody at gamedev.net
 */
 
-#define SOIL_CHECK_FOR_GL_ERRORS 0
+#define SOIL_CHECK_FOR_GL_ERRORS 1
 
 #ifdef WIN32
 	#define WIN32_LEAN_AND_MEAN
@@ -1351,15 +1351,16 @@ unsigned int
 		} else
 		{
 			/*	unsigned int clamp_mode = SOIL_CLAMP_TO_EDGE;	*/
-			unsigned int clamp_mode = SOIL_GL_CLAMP;
+			unsigned int clamp_mode = GL_CLAMP_TO_EDGE;
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_S, clamp_mode );
+			check_for_GL_errors( "GL_TEXTURE_WRAP_S" );
 			glTexParameteri( opengl_texture_type, GL_TEXTURE_WRAP_T, clamp_mode );
+			check_for_GL_errors( "GL_TEXTURE_WRAP_T" );
 			if( opengl_texture_type == SOIL_TEXTURE_CUBE_MAP )
 			{
 				/*	SOIL_TEXTURE_WRAP_R is invalid if cubemaps aren't supported	*/
 				glTexParameteri( opengl_texture_type, SOIL_TEXTURE_WRAP_R, clamp_mode );
 			}
-			check_for_GL_errors( "GL_TEXTURE_WRAP_*" );
 		}
 		/*	done	*/
 		result_string_pointer = "Image loaded as an OpenGL texture";
